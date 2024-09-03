@@ -56,6 +56,7 @@
   (none)
   (true)
   (false)
+  (ellipsis)
 ] @constant.builtin
 
 [
