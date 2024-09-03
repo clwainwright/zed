@@ -5,20 +5,20 @@
 ; Module imports
 
 (import_statement
-  (dotted_name (identifier) @type))
+  (dotted_name (identifier) @type.import))
 
 (import_statement
   (aliased_import
-    name: (dotted_name (identifier) @type)
-    alias: (identifier) @type))
+    name: (dotted_name (identifier) @type.import)
+    alias: (identifier) @type.import))
 
 (import_from_statement
-  (dotted_name (identifier) @type))
+  (dotted_name (identifier) @type.import))
 
 (import_from_statement
   (aliased_import
-    name: (dotted_name (identifier) @type)
-    alias: (identifier) @type))
+    name: (dotted_name (identifier) @type.import)
+    alias: (identifier) @type.import))
 
 ; Function calls
 
