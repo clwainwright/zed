@@ -2,6 +2,14 @@
 (attribute attribute: (identifier) @property)
 (type (identifier) @type)
 
+; Identifier naming conventions
+
+((identifier) @type.class
+ (#match? @type.class "^[A-Z]"))
+
+((identifier) @constant
+ (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
+
 ; Module imports
 
 (import_statement
@@ -22,25 +30,28 @@
 
 ; Function calls
 
-(decorator) @function
+(decorator
+  "@" @punctuation.special
+  (identifier) @function.decorator)
 
 (call
-  function: (attribute attribute: (identifier) @function.method))
+  function: (attribute attribute: (identifier) @function.method.call))
 (call
-  function: (identifier) @function)
+  function: (identifier) @function.call)
 
-; Function definitions
+; Function and class definitions
 
 (function_definition
-  name: (identifier) @function)
+  name: (identifier) @function.definition)
 
-; Identifier naming conventions
+; Class definitions and calling: needs to come after the regex matching above
 
-((identifier) @type
- (#match? @type "^[A-Z]"))
+(class_definition
+  name: (identifier) @type.class.definition)
 
-((identifier) @constant
- (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
+(call
+  function: (identifier) @type.class.call
+  (#match? @type.class.call "^[A-Z][A-Z0-9_]*[a-z]"))
 
 ; Builtin functions
 
