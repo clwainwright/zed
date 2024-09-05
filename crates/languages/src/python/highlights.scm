@@ -39,10 +39,33 @@
 (call
   function: (identifier) @function.call)
 
-; Function and class definitions
+(keyword_argument name: (identifier) @variable.parameter.keyword)
+
+; Function definitions
 
 (function_definition
   name: (identifier) @function.definition)
+
+(parameters
+  (identifier) @variable.parameter.definition)
+(parameters
+  (typed_parameter
+    (identifier) @variable.parameter.definition))
+(parameters
+  (default_parameter
+    (identifier) @variable.parameter.definition))
+(parameters
+  (typed_default_parameter
+    name: (identifier) @variable.parameter.definition))
+(parameters
+  (keyword_separator)
+  (identifier) @variable.parameter.definition)
+(parameters
+  (list_splat_pattern
+    (identifier) @variable.parameter.definition))
+(parameters
+  (dictionary_splat_pattern
+    (identifier) @variable.parameter.definition))
 
 ; Class definitions and calling: needs to come after the regex matching above
 
