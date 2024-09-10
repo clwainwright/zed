@@ -1,14 +1,19 @@
 (parameter (identifier) @variable)
 (attribute attribute: (identifier) @property)
-(type (identifier) @type)
 
 ; Identifier naming conventions
+; (keep this up high in the scheme so that it can be overridden by actual syntax)
 
 ((identifier) @type.class
  (#match? @type.class "^[A-Z]"))
 
 ((identifier) @constant
  (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
+
+; Basic types and type hints
+
+(type (identifier) @type)
+(type (generic_type (identifier) @type))
 
 ; Module imports
 
