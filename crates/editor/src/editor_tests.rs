@@ -2,9 +2,8 @@ use super::*;
 use crate::{
     scroll::scroll_amount::ScrollAmount,
     test::{
-        assert_text_with_selections, build_editor, editor_hunks,
-        editor_lsp_test_context::EditorLspTestContext, editor_test_context::EditorTestContext,
-        expanded_hunks, expanded_hunks_background_highlights, select_ranges,
+        assert_text_with_selections, build_editor, editor_lsp_test_context::EditorLspTestContext,
+        editor_test_context::EditorTestContext, select_ranges,
     },
     JoinLines,
 };
@@ -20,8 +19,8 @@ use language::{
     },
     BracketPairConfig,
     Capability::ReadWrite,
-    FakeLspAdapter, IndentGuide, LanguageConfig, LanguageConfigOverride, LanguageMatcher, Override,
-    ParsedMarkdown, Point,
+    FakeLspAdapter, IndentGuide, LanguageConfig, LanguageConfigOverride, LanguageMatcher,
+    LanguageName, Override, ParsedMarkdown, Point,
 };
 use language_settings::{Formatter, FormatterList, IndentGuideSettings};
 use multi_buffer::MultiBufferIndentGuide;
@@ -170,8 +169,12 @@ fn test_undo_redo_with_selection_restoration(cx: &mut TestAppContext) {
     init_test(cx, |_| {});
 
     let mut now = Instant::now();
-    let buffer = cx.new_model(|cx| language::Buffer::local("123456", cx));
-    let group_interval = buffer.update(cx, |buffer, _| buffer.transaction_group_interval());
+    let group_interval = Duration::from_millis(1);
+    let buffer = cx.new_model(|cx| {
+        let mut buf = language::Buffer::local("123456", cx);
+        buf.set_group_interval(group_interval);
+        buf
+    });
     let buffer = cx.new_model(|cx| MultiBuffer::singleton(buffer, cx));
     let editor = cx.add_window(|cx| build_editor(buffer.clone(), cx));
 
@@ -852,7 +855,7 @@ fn test_fold_action(cx: &mut TestAppContext) {
     _ = view.update(cx, |view, cx| {
         view.change_selections(None, cx, |s| {
             s.select_display_ranges([
-                DisplayPoint::new(DisplayRow(8), 0)..DisplayPoint::new(DisplayRow(12), 0)
+                DisplayPoint::new(DisplayRow(7), 0)..DisplayPoint::new(DisplayRow(12), 0)
             ]);
         });
         view.fold(&Fold, cx);
@@ -940,7 +943,7 @@ fn test_fold_action_whitespace_sensitive_language(cx: &mut TestAppContext) {
     _ = view.update(cx, |view, cx| {
         view.change_selections(None, cx, |s| {
             s.select_display_ranges([
-                DisplayPoint::new(DisplayRow(7), 0)..DisplayPoint::new(DisplayRow(10), 0)
+                DisplayPoint::new(DisplayRow(6), 0)..DisplayPoint::new(DisplayRow(10), 0)
             ]);
         });
         view.fold(&Fold, cx);
@@ -1022,7 +1025,7 @@ fn test_fold_action_multiple_line_breaks(cx: &mut TestAppContext) {
     _ = view.update(cx, |view, cx| {
         view.change_selections(None, cx, |s| {
             s.select_display_ranges([
-                DisplayPoint::new(DisplayRow(7), 0)..DisplayPoint::new(DisplayRow(11), 0)
+                DisplayPoint::new(DisplayRow(6), 0)..DisplayPoint::new(DisplayRow(11), 0)
             ]);
         });
         view.fold(&Fold, cx);
@@ -1077,6 +1080,112 @@ fn test_fold_action_multiple_line_breaks(cx: &mut TestAppContext) {
         );
 
         view.unfold_lines(&UnfoldLines, cx);
+        assert_eq!(view.display_text(cx), view.buffer.read(cx).read(cx).text());
+    });
+}
+
+#[gpui::test]
+fn test_fold_at_level(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let view = cx.add_window(|cx| {
+        let buffer = MultiBuffer::build_simple(
+            &"
+                class Foo:
+                    # Hello!
+
+                    def a():
+                        print(1)
+
+                    def b():
+                        print(2)
+
+
+                class Bar:
+                    # World!
+
+                    def a():
+                        print(1)
+
+                    def b():
+                        print(2)
+
+
+            "
+            .unindent(),
+            cx,
+        );
+        build_editor(buffer.clone(), cx)
+    });
+
+    _ = view.update(cx, |view, cx| {
+        view.fold_at_level(&FoldAtLevel { level: 2 }, cx);
+        assert_eq!(
+            view.display_text(cx),
+            "
+                class Foo:
+                    # Hello!
+
+                    def a():⋯
+
+                    def b():⋯
+
+
+                class Bar:
+                    # World!
+
+                    def a():⋯
+
+                    def b():⋯
+
+
+            "
+            .unindent(),
+        );
+
+        view.fold_at_level(&FoldAtLevel { level: 1 }, cx);
+        assert_eq!(
+            view.display_text(cx),
+            "
+                class Foo:⋯
+
+
+                class Bar:⋯
+
+
+            "
+            .unindent(),
+        );
+
+        view.unfold_all(&UnfoldAll, cx);
+        view.fold_at_level(&FoldAtLevel { level: 0 }, cx);
+        assert_eq!(
+            view.display_text(cx),
+            "
+                class Foo:
+                    # Hello!
+
+                    def a():
+                        print(1)
+
+                    def b():
+                        print(2)
+
+
+                class Bar:
+                    # World!
+
+                    def a():
+                        print(1)
+
+                    def b():
+                        print(2)
+
+
+            "
+            .unindent(),
+        );
+
         assert_eq!(view.display_text(cx), view.buffer.read(cx).read(cx).text());
     });
 }
@@ -2322,7 +2431,7 @@ async fn test_newline_above(cx: &mut gpui::TestAppContext) {
     let language = Arc::new(
         Language::new(
             LanguageConfig::default(),
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_indents_query(r#"(_ "(" ")" @end) @indent"#)
         .unwrap(),
@@ -2370,7 +2479,7 @@ async fn test_newline_below(cx: &mut gpui::TestAppContext) {
     let language = Arc::new(
         Language::new(
             LanguageConfig::default(),
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_indents_query(r#"(_ "(" ")" @end) @indent"#)
         .unwrap(),
@@ -2524,7 +2633,7 @@ async fn test_tab_in_leading_whitespace_auto_indents_lines(cx: &mut gpui::TestAp
     let language = Arc::new(
         Language::new(
             LanguageConfig::default(),
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_indents_query(r#"(_ "(" ")" @end) @indent"#)
         .unwrap(),
@@ -2585,7 +2694,7 @@ async fn test_tab_with_mixed_whitespace(cx: &mut gpui::TestAppContext) {
     let language = Arc::new(
         Language::new(
             LanguageConfig::default(),
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_indents_query(r#"(_ "{" "}" @end) @indent"#)
         .unwrap(),
@@ -2822,7 +2931,7 @@ fn test_indent_outdent_with_excerpts(cx: &mut TestAppContext) {
         Buffer::local("const c: usize = 3;\n", cx).with_language(rust_language, cx)
     });
     let multibuffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         multibuffer.push_excerpts(
             toml_buffer.clone(),
             [ExcerptRange {
@@ -3869,8 +3978,7 @@ fn test_move_line_up_down_with_blocks(cx: &mut TestAppContext) {
         editor.insert_blocks(
             [BlockProperties {
                 style: BlockStyle::Fixed,
-                position: snapshot.anchor_after(Point::new(2, 0)),
-                disposition: BlockDisposition::Below,
+                placement: BlockPlacement::Below(snapshot.anchor_after(Point::new(2, 0))),
                 height: 1,
                 render: Box::new(|_| div().into_any()),
                 priority: 0,
@@ -3883,6 +3991,76 @@ fn test_move_line_up_down_with_blocks(cx: &mut TestAppContext) {
         });
         editor.move_line_down(&MoveLineDown, cx);
     });
+}
+
+#[gpui::test]
+async fn test_selections_and_replace_blocks(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let mut cx = EditorTestContext::new(cx).await;
+    cx.set_state(
+        &"
+            ˇzero
+            one
+            two
+            three
+            four
+            five
+        "
+        .unindent(),
+    );
+
+    // Create a four-line block that replaces three lines of text.
+    cx.update_editor(|editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        let snapshot = &snapshot.buffer_snapshot;
+        let placement = BlockPlacement::Replace(
+            snapshot.anchor_after(Point::new(1, 0))..snapshot.anchor_after(Point::new(3, 0)),
+        );
+        editor.insert_blocks(
+            [BlockProperties {
+                placement,
+                height: 4,
+                style: BlockStyle::Sticky,
+                render: Box::new(|_| gpui::div().into_any_element()),
+                priority: 0,
+            }],
+            None,
+            cx,
+        );
+    });
+
+    // Move down so that the cursor touches the block.
+    cx.update_editor(|editor, cx| {
+        editor.move_down(&Default::default(), cx);
+    });
+    cx.assert_editor_state(
+        &"
+            zero
+            «one
+            two
+            threeˇ»
+            four
+            five
+        "
+        .unindent(),
+    );
+
+    // Move down past the block.
+    cx.update_editor(|editor, cx| {
+        editor.move_down(&Default::default(), cx);
+    });
+    cx.assert_editor_state(
+        &"
+            zero
+            one
+            two
+            three
+            ˇfour
+            five
+        "
+        .unindent(),
+    );
 }
 
 #[gpui::test]
@@ -3980,6 +4158,350 @@ fn test_transpose(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_rewrap(cx: &mut TestAppContext) {
+    init_test(cx, |_| {});
+
+    let mut cx = EditorTestContext::new(cx).await;
+
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["// ".into()],
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            // ˇLorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis porttitor id. Aliquam id accumsan eros.
+        "};
+
+        let wrapped_text = indoc! {"
+            // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            // purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus
+            // auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam
+            // tincidunt hendrerit. Praesent semper egestas tellus id dignissim.
+            // Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed
+            // vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam,
+            // et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum
+            // dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu
+            // viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis
+            // porttitor id. Aliquam id accumsan eros.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test that rewrapping works inside of a selection
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["// ".into()],
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            «// Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis porttitor id. Aliquam id accumsan eros.ˇ»
+        "};
+
+        let wrapped_text = indoc! {"
+            // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            // purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus
+            // auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam
+            // tincidunt hendrerit. Praesent semper egestas tellus id dignissim.
+            // Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed
+            // vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam,
+            // et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum
+            // dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu
+            // viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis
+            // porttitor id. Aliquam id accumsan eros.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test that cursors that expand to the same region are collapsed.
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["// ".into()],
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            // ˇLorem ipsum dolor sit amet, consectetur adipiscing elit.
+            // ˇVivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque.
+            // ˇVivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et,
+            // ˇblandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis porttitor id. Aliquam id accumsan eros.
+        "};
+
+        let wrapped_text = indoc! {"
+            // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            // purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus
+            // auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam
+            // tincidunt hendrerit. Praesent semper egestas tellus id dignissim.
+            // Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed
+            // vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam,
+            // et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum
+            // dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu
+            // viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis
+            // porttitor id. Aliquam id accumsan eros.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test that non-contiguous selections are treated separately.
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["// ".into()],
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            // ˇLorem ipsum dolor sit amet, consectetur adipiscing elit.
+            // ˇVivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque.
+            //
+            // ˇVivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et,
+            // ˇblandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis porttitor id. Aliquam id accumsan eros.
+        "};
+
+        let wrapped_text = indoc! {"
+            // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            // purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus
+            // auctor, eu lacinia sapien scelerisque.ˇ
+            //
+            // Vivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas
+            // tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et,
+            // blandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec
+            // molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque
+            // nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras egestas
+            // porta metus, eu viverra ipsum efficitur quis. Donec luctus eros turpis, id
+            // vulputate turpis porttitor id. Aliquam id accumsan eros.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test that different comment prefixes are supported.
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["# ".into()],
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            # ˇLorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras egestas porta metus, eu viverra ipsum efficitur quis. Donec luctus eros turpis, id vulputate turpis porttitor id. Aliquam id accumsan eros.
+        "};
+
+        let wrapped_text = indoc! {"
+            # Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            # purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor,
+            # eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt
+            # hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio
+            # lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit
+            # amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet
+            # in. Integer sit amet scelerisque nisi. Lorem ipsum dolor sit amet, consectetur
+            # adipiscing elit. Cras egestas porta metus, eu viverra ipsum efficitur quis.
+            # Donec luctus eros turpis, id vulputate turpis porttitor id. Aliquam id
+            # accumsan eros.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test that rewrapping is ignored outside of comments in most languages.
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["// ".into(), "/// ".into()],
+                ..LanguageConfig::default()
+            },
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            /// Adds two numbers.
+            /// Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae.ˇ
+            fn add(a: u32, b: u32) -> u32 {
+                a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + bˇ
+            }
+        "};
+
+        let wrapped_text = indoc! {"
+            /// Adds two numbers. Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+            /// Vivamus mollis elit purus, a ornare lacus gravida vitae.ˇ
+            fn add(a: u32, b: u32) -> u32 {
+                a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + b + a + bˇ
+            }
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test that rewrapping works in Markdown and Plain Text languages.
+    {
+        let markdown_language = Arc::new(Language::new(
+            LanguageConfig {
+                name: "Markdown".into(),
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(markdown_language), cx));
+
+        let unwrapped_text = indoc! {"
+            # Hello
+
+            Lorem ipsum dolor sit amet, ˇconsectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi.
+        "};
+
+        let wrapped_text = indoc! {"
+            # Hello
+
+            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor,
+            eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt
+            hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio
+            lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet
+            nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in.
+            Integer sit amet scelerisque nisi.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+
+        let plaintext_language = Arc::new(Language::new(
+            LanguageConfig {
+                name: "Plain Text".into(),
+                ..LanguageConfig::default()
+            },
+            None,
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(plaintext_language), cx));
+
+        let unwrapped_text = indoc! {"
+            Lorem ipsum dolor sit amet, ˇconsectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor, eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in. Integer sit amet scelerisque nisi.
+        "};
+
+        let wrapped_text = indoc! {"
+            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit
+            purus, a ornare lacus gravida vitae. Proin consectetur felis vel purus auctor,
+            eu lacinia sapien scelerisque. Vivamus sit amet neque et quam tincidunt
+            hendrerit. Praesent semper egestas tellus id dignissim. Pellentesque odio
+            lectus, iaculis ac volutpat et, blandit quis urna. Sed vestibulum nisi sit amet
+            nisl venenatis tempus. Donec molestie blandit quam, et porta nunc laoreet in.
+            Integer sit amet scelerisque nisi.ˇ
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+
+    // Test rewrapping unaligned comments in a selection.
+    {
+        let language = Arc::new(Language::new(
+            LanguageConfig {
+                line_comments: vec!["// ".into(), "/// ".into()],
+                ..LanguageConfig::default()
+            },
+            Some(tree_sitter_rust::LANGUAGE.into()),
+        ));
+        cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+        let unwrapped_text = indoc! {"
+            fn foo() {
+                if true {
+            «        // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae.
+            // Praesent semper egestas tellus id dignissim.ˇ»
+                    do_something();
+                } else {
+                    //
+                }
+            }
+        "};
+
+        let wrapped_text = indoc! {"
+            fn foo() {
+                if true {
+                    // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus
+                    // mollis elit purus, a ornare lacus gravida vitae. Praesent semper
+                    // egestas tellus id dignissim.ˇ
+                    do_something();
+                } else {
+                    //
+                }
+            }
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+
+        let unwrapped_text = indoc! {"
+            fn foo() {
+                if true {
+            «ˇ        // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus mollis elit purus, a ornare lacus gravida vitae.
+            // Praesent semper egestas tellus id dignissim.»
+                    do_something();
+                } else {
+                    //
+                }
+
+            }
+        "};
+
+        let wrapped_text = indoc! {"
+            fn foo() {
+                if true {
+                    // Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus
+                    // mollis elit purus, a ornare lacus gravida vitae. Praesent semper
+                    // egestas tellus id dignissim.ˇ
+                    do_something();
+                } else {
+                    //
+                }
+
+            }
+        "};
+
+        cx.set_state(unwrapped_text);
+        cx.update_editor(|e, cx| e.rewrap(&Rewrap, cx));
+        cx.assert_editor_state(wrapped_text);
+    }
+}
+
+#[gpui::test]
 async fn test_clipboard(cx: &mut gpui::TestAppContext) {
     init_test(cx, |_| {});
 
@@ -4072,7 +4594,7 @@ async fn test_paste_multiline(cx: &mut gpui::TestAppContext) {
     let mut cx = EditorTestContext::new(cx).await;
     let language = Arc::new(Language::new(
         LanguageConfig::default(),
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
     cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
 
@@ -4783,7 +5305,7 @@ async fn test_select_larger_smaller_syntax_node(cx: &mut gpui::TestAppContext) {
 
     let language = Arc::new(Language::new(
         LanguageConfig::default(),
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     let text = r#"
@@ -4992,7 +5514,7 @@ async fn test_autoindent_selections(cx: &mut gpui::TestAppContext) {
                 },
                 ..Default::default()
             },
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_indents_query(
             r#"
@@ -5085,7 +5607,7 @@ async fn test_autoclose_and_auto_surround_pairs(cx: &mut gpui::TestAppContext) {
             autoclose_before: "})]".to_string(),
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     cx.language_registry().add(language.clone());
@@ -5257,7 +5779,7 @@ async fn test_always_treat_brackets_as_autoclosed_skip_over(cx: &mut gpui::TestA
             autoclose_before: "})]".to_string(),
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     cx.language_registry().add(language.clone());
@@ -5397,7 +5919,7 @@ async fn test_autoclose_with_embedded_language(cx: &mut gpui::TestAppContext) {
             autoclose_before: "})]>".into(),
             ..Default::default()
         },
-        Some(tree_sitter_typescript::language_tsx()),
+        Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
     ));
 
     cx.language_registry().add(html_language.clone());
@@ -5572,7 +6094,7 @@ async fn test_autoclose_with_overrides(cx: &mut gpui::TestAppContext) {
                 autoclose_before: "})]>".into(),
                 ..Default::default()
             },
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_override_query("(string_literal) @string")
         .unwrap(),
@@ -5677,7 +6199,7 @@ async fn test_surround_with_pair(cx: &mut gpui::TestAppContext) {
             },
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     let text = r#"
@@ -5826,7 +6348,7 @@ async fn test_delete_autoclose_pair(cx: &mut gpui::TestAppContext) {
             autoclose_before: "}".to_string(),
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     let text = r#"
@@ -5953,7 +6475,7 @@ async fn test_always_treat_brackets_as_autoclosed_delete(cx: &mut gpui::TestAppC
             autoclose_before: "})]".to_string(),
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     cx.language_registry().add(language.clone());
@@ -6023,7 +6545,7 @@ async fn test_auto_replace_emoji_shortcode(cx: &mut gpui::TestAppContext) {
 
     let language = Arc::new(Language::new(
         LanguageConfig::default(),
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     let buffer = cx.new_model(|cx| Buffer::local("", cx).with_language(language, cx));
@@ -6205,7 +6727,7 @@ async fn test_document_format_during_save(cx: &mut gpui::TestAppContext) {
 
     let language_registry = project.read_with(cx, |project, _| project.languages().clone());
     language_registry.add(rust_lang());
-    let mut fake_servers = language_registry.register_fake_lsp_adapter(
+    let mut fake_servers = language_registry.register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             capabilities: lsp::ServerCapabilities {
@@ -6361,7 +6883,7 @@ async fn test_multibuffer_format_during_save(cx: &mut gpui::TestAppContext) {
 
     let language_registry = project.read_with(cx, |project, _| project.languages().clone());
     language_registry.add(rust_lang());
-    let mut fake_servers = language_registry.register_fake_lsp_adapter(
+    let mut fake_servers = language_registry.register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             capabilities: lsp::ServerCapabilities {
@@ -6399,7 +6921,7 @@ async fn test_multibuffer_format_during_save(cx: &mut gpui::TestAppContext) {
         .unwrap();
 
     let multi_buffer = cx.new_model(|cx| {
-        let mut multi_buffer = MultiBuffer::new(0, ReadWrite);
+        let mut multi_buffer = MultiBuffer::new(ReadWrite);
         multi_buffer.push_excerpts(
             buffer_1.clone(),
             [
@@ -6557,7 +7079,7 @@ async fn test_range_format_during_save(cx: &mut gpui::TestAppContext) {
 
     let language_registry = project.read_with(cx, |project, _| project.languages().clone());
     language_registry.add(rust_lang());
-    let mut fake_servers = language_registry.register_fake_lsp_adapter(
+    let mut fake_servers = language_registry.register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             capabilities: lsp::ServerCapabilities {
@@ -6698,7 +7220,7 @@ async fn test_document_format_manual_trigger(cx: &mut gpui::TestAppContext) {
             },
             ..LanguageConfig::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     )));
     update_test_language_settings(cx, |settings| {
         // Enable Prettier formatting for the same buffer, and ensure
@@ -6708,7 +7230,7 @@ async fn test_document_format_manual_trigger(cx: &mut gpui::TestAppContext) {
             ..PrettierSettings::default()
         });
     });
-    let mut fake_servers = language_registry.register_fake_lsp_adapter(
+    let mut fake_servers = language_registry.register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             capabilities: lsp::ServerCapabilities {
@@ -6733,7 +7255,12 @@ async fn test_document_format_manual_trigger(cx: &mut gpui::TestAppContext) {
 
     let format = editor
         .update(cx, |editor, cx| {
-            editor.perform_format(project.clone(), FormatTrigger::Manual, cx)
+            editor.perform_format(
+                project.clone(),
+                FormatTrigger::Manual,
+                FormatTarget::Buffer,
+                cx,
+            )
         })
         .unwrap();
     fake_server
@@ -6769,7 +7296,7 @@ async fn test_document_format_manual_trigger(cx: &mut gpui::TestAppContext) {
     });
     let format = editor
         .update(cx, |editor, cx| {
-            editor.perform_format(project, FormatTrigger::Manual, cx)
+            editor.perform_format(project, FormatTrigger::Manual, FormatTarget::Buffer, cx)
         })
         .unwrap();
     cx.executor().advance_clock(super::FORMAT_TIMEOUT);
@@ -7033,7 +7560,7 @@ async fn test_handle_input_for_show_signature_help_auto_signature_help_true(
             autoclose_before: "})]".to_string(),
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     );
     let language = Arc::new(language);
 
@@ -7175,7 +7702,7 @@ async fn test_handle_input_with_different_show_signature_settings(cx: &mut gpui:
             autoclose_before: "})]".to_string(),
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     );
     let language = Arc::new(language);
 
@@ -7863,6 +8390,74 @@ async fn test_completion_page_up_down_keys(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_completion_sort(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorLspTestContext::new_rust(
+        lsp::ServerCapabilities {
+            completion_provider: Some(lsp::CompletionOptions {
+                trigger_characters: Some(vec![".".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        cx,
+    )
+    .await;
+    cx.lsp
+        .handle_request::<lsp::request::Completion, _, _>(move |_, _| async move {
+            Ok(Some(lsp::CompletionResponse::Array(vec![
+                lsp::CompletionItem {
+                    label: "Range".into(),
+                    sort_text: Some("a".into()),
+                    ..Default::default()
+                },
+                lsp::CompletionItem {
+                    label: "r".into(),
+                    sort_text: Some("b".into()),
+                    ..Default::default()
+                },
+                lsp::CompletionItem {
+                    label: "ret".into(),
+                    sort_text: Some("c".into()),
+                    ..Default::default()
+                },
+                lsp::CompletionItem {
+                    label: "return".into(),
+                    sort_text: Some("d".into()),
+                    ..Default::default()
+                },
+                lsp::CompletionItem {
+                    label: "slice".into(),
+                    sort_text: Some("d".into()),
+                    ..Default::default()
+                },
+            ])))
+        });
+    cx.set_state("rˇ");
+    cx.executor().run_until_parked();
+    cx.update_editor(|editor, cx| {
+        editor.show_completions(
+            &ShowCompletions {
+                trigger: Some("r".into()),
+            },
+            cx,
+        );
+    });
+    cx.executor().run_until_parked();
+
+    cx.update_editor(|editor, _| {
+        if let Some(ContextMenu::Completions(menu)) = editor.context_menu.read().as_ref() {
+            assert_eq!(
+                menu.matches.iter().map(|m| &m.string).collect::<Vec<_>>(),
+                &["r", "ret", "Range", "return"]
+            );
+        } else {
+            panic!("expected completion menu to be open");
+        }
+    });
+}
+
+#[gpui::test]
 async fn test_no_duplicated_completion_requests(cx: &mut gpui::TestAppContext) {
     init_test(cx, |_| {});
 
@@ -7968,7 +8563,7 @@ async fn test_toggle_comment(cx: &mut gpui::TestAppContext) {
             line_comments: vec!["// ".into(), "//! ".into(), "/// ".into()],
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
     cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
 
@@ -8081,6 +8676,131 @@ async fn test_toggle_comment(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_toggle_comment_ignore_indent(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+    let mut cx = EditorTestContext::new(cx).await;
+    let language = Arc::new(Language::new(
+        LanguageConfig {
+            line_comments: vec!["// ".into(), "//! ".into(), "/// ".into()],
+            ..Default::default()
+        },
+        Some(tree_sitter_rust::LANGUAGE.into()),
+    ));
+    cx.update_buffer(|buffer, cx| buffer.set_language(Some(language), cx));
+
+    let toggle_comments = &ToggleComments {
+        advance_downwards: false,
+        ignore_indent: true,
+    };
+
+    // If multiple selections intersect a line, the line is only toggled once.
+    cx.set_state(indoc! {"
+        fn a() {
+        //    «b();
+        //    c();
+        //    ˇ» d();
+        }
+    "});
+
+    cx.update_editor(|e, cx| e.toggle_comments(toggle_comments, cx));
+
+    cx.assert_editor_state(indoc! {"
+        fn a() {
+            «b();
+            c();
+            ˇ» d();
+        }
+    "});
+
+    // The comment prefix is inserted at the beginning of each line
+    cx.update_editor(|e, cx| e.toggle_comments(toggle_comments, cx));
+
+    cx.assert_editor_state(indoc! {"
+        fn a() {
+        //    «b();
+        //    c();
+        //    ˇ» d();
+        }
+    "});
+
+    // If a selection ends at the beginning of a line, that line is not toggled.
+    cx.set_selections_state(indoc! {"
+        fn a() {
+        //    b();
+        //    «c();
+        ˇ»//     d();
+        }
+    "});
+
+    cx.update_editor(|e, cx| e.toggle_comments(toggle_comments, cx));
+
+    cx.assert_editor_state(indoc! {"
+        fn a() {
+        //    b();
+            «c();
+        ˇ»//     d();
+        }
+    "});
+
+    // If a selection span a single line and is empty, the line is toggled.
+    cx.set_state(indoc! {"
+        fn a() {
+            a();
+            b();
+        ˇ
+        }
+    "});
+
+    cx.update_editor(|e, cx| e.toggle_comments(toggle_comments, cx));
+
+    cx.assert_editor_state(indoc! {"
+        fn a() {
+            a();
+            b();
+        //ˇ
+        }
+    "});
+
+    // If a selection span multiple lines, empty lines are not toggled.
+    cx.set_state(indoc! {"
+        fn a() {
+            «a();
+
+            c();ˇ»
+        }
+    "});
+
+    cx.update_editor(|e, cx| e.toggle_comments(toggle_comments, cx));
+
+    cx.assert_editor_state(indoc! {"
+        fn a() {
+        //    «a();
+
+        //    c();ˇ»
+        }
+    "});
+
+    // If a selection includes multiple comment prefixes, all lines are uncommented.
+    cx.set_state(indoc! {"
+        fn a() {
+        //    «a();
+        ///    b();
+        //!    c();ˇ»
+        }
+    "});
+
+    cx.update_editor(|e, cx| e.toggle_comments(toggle_comments, cx));
+
+    cx.assert_editor_state(indoc! {"
+        fn a() {
+            «a();
+            b();
+            c();ˇ»
+        }
+    "});
+}
+
+#[gpui::test]
 async fn test_advance_downward_on_toggle_comment(cx: &mut gpui::TestAppContext) {
     init_test(cx, |_| {});
 
@@ -8089,7 +8809,7 @@ async fn test_advance_downward_on_toggle_comment(cx: &mut gpui::TestAppContext) 
             line_comments: vec!["// ".into()],
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ));
 
     let mut cx = EditorTestContext::new(cx).await;
@@ -8101,6 +8821,7 @@ async fn test_advance_downward_on_toggle_comment(cx: &mut gpui::TestAppContext) 
 
     let toggle_comments = &ToggleComments {
         advance_downwards: true,
+        ignore_indent: false,
     };
 
     // Single cursor on one line -> advance
@@ -8242,7 +8963,7 @@ async fn test_toggle_block_comment(cx: &mut gpui::TestAppContext) {
             line_comments: vec!["// ".into()],
             ..Default::default()
         },
-        Some(tree_sitter_typescript::language_tsx()),
+        Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
     ));
 
     cx.language_registry().add(html_language.clone());
@@ -8342,7 +9063,7 @@ fn test_editing_disjoint_excerpts(cx: &mut TestAppContext) {
 
     let buffer = cx.new_model(|cx| Buffer::local(sample_text(3, 4, 'a'), cx));
     let multibuffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         multibuffer.push_excerpts(
             buffer.clone(),
             [
@@ -8426,7 +9147,7 @@ fn test_editing_overlapping_excerpts(cx: &mut TestAppContext) {
     });
     let buffer = cx.new_model(|cx| Buffer::local(initial_text, cx));
     let multibuffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         multibuffer.push_excerpts(buffer, excerpt_ranges, cx);
         multibuffer
     });
@@ -8485,7 +9206,7 @@ fn test_refresh_selections(cx: &mut TestAppContext) {
     let buffer = cx.new_model(|cx| Buffer::local(sample_text(3, 4, 'a'), cx));
     let mut excerpt1_id = None;
     let multibuffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         excerpt1_id = multibuffer
             .push_excerpts(
                 buffer.clone(),
@@ -8570,7 +9291,7 @@ fn test_refresh_selections_while_selecting_with_mouse(cx: &mut TestAppContext) {
     let buffer = cx.new_model(|cx| Buffer::local(sample_text(3, 4, 'a'), cx));
     let mut excerpt1_id = None;
     let multibuffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         excerpt1_id = multibuffer
             .push_excerpts(
                 buffer.clone(),
@@ -8650,7 +9371,7 @@ async fn test_extra_newline_insertion(cx: &mut gpui::TestAppContext) {
                 },
                 ..Default::default()
             },
-            Some(tree_sitter_rust::language()),
+            Some(tree_sitter_rust::LANGUAGE.into()),
         )
         .with_indents_query("")
         .unwrap(),
@@ -8958,7 +9679,7 @@ async fn test_following_with_multiple_excerpts(cx: &mut gpui::TestAppContext) {
     let cx = &mut VisualTestContext::from_window(*workspace.deref(), cx);
 
     let leader = pane.update(cx, |_, cx| {
-        let multibuffer = cx.new_model(|_| MultiBuffer::new(0, ReadWrite));
+        let multibuffer = cx.new_model(|_| MultiBuffer::new(ReadWrite));
         cx.new_view(|cx| build_editor(multibuffer.clone(), cx))
     });
 
@@ -9279,7 +10000,7 @@ async fn go_to_hunk(executor: BackgroundExecutor, cx: &mut gpui::TestAppContext)
     cx.update_editor(|editor, cx| {
         //Wrap around the bottom of the buffer
         for _ in 0..3 {
-            editor.go_to_hunk(&GoToHunk, cx);
+            editor.go_to_next_hunk(&GoToHunk, cx);
         }
     });
 
@@ -9365,7 +10086,7 @@ async fn go_to_hunk(executor: BackgroundExecutor, cx: &mut gpui::TestAppContext)
 
         //Make sure that the fold only gets one hunk
         for _ in 0..4 {
-            editor.go_to_hunk(&GoToHunk, cx);
+            editor.go_to_next_hunk(&GoToHunk, cx);
         }
     });
 
@@ -9486,9 +10207,9 @@ async fn test_on_type_formatting_not_triggered(cx: &mut gpui::TestAppContext) {
             },
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     )));
-    let mut fake_servers = language_registry.register_fake_lsp_adapter(
+    let mut fake_servers = language_registry.register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             capabilities: lsp::ServerCapabilities {
@@ -9587,21 +10308,21 @@ async fn test_language_server_restart_due_to_settings_change(cx: &mut gpui::Test
     let server_restarts = Arc::new(AtomicUsize::new(0));
     let closure_restarts = Arc::clone(&server_restarts);
     let language_server_name = "test language server";
-    let language_name: Arc<str> = "Rust".into();
+    let language_name: LanguageName = "Rust".into();
 
     let language_registry = project.read_with(cx, |project, _| project.languages().clone());
     language_registry.add(Arc::new(Language::new(
         LanguageConfig {
-            name: Arc::clone(&language_name),
+            name: language_name.clone(),
             matcher: LanguageMatcher {
                 path_suffixes: vec!["rs".to_string()],
                 ..Default::default()
             },
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     )));
-    let mut fake_servers = language_registry.register_fake_lsp_adapter(
+    let mut fake_servers = language_registry.register_fake_lsp(
         "Rust",
         FakeLspAdapter {
             name: language_server_name,
@@ -9629,7 +10350,7 @@ async fn test_language_server_restart_due_to_settings_change(cx: &mut gpui::Test
     let _fake_server = fake_servers.next().await.unwrap();
     update_test_language_settings(cx, |language_settings| {
         language_settings.languages.insert(
-            Arc::clone(&language_name),
+            language_name.clone(),
             LanguageSettingsContent {
                 tab_size: NonZeroU32::new(8),
                 ..Default::default()
@@ -9832,7 +10553,7 @@ async fn test_completions_in_languages_with_extra_word_characters(cx: &mut gpui:
                 .collect(),
                 ..Default::default()
             },
-            Some(tree_sitter_typescript::language_tsx()),
+            Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         )
         .with_override_query("(jsx_self_closing_element) @element")
         .unwrap(),
@@ -9935,7 +10656,7 @@ async fn test_document_format_with_prettier(cx: &mut gpui::TestAppContext) {
             },
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     )));
     update_test_language_settings(cx, |settings| {
         settings.defaults.prettier = Some(PrettierSettings {
@@ -9945,7 +10666,7 @@ async fn test_document_format_with_prettier(cx: &mut gpui::TestAppContext) {
     });
 
     let test_plugin = "test_plugin";
-    let _ = language_registry.register_fake_lsp_adapter(
+    let _ = language_registry.register_fake_lsp(
         "TypeScript",
         FakeLspAdapter {
             prettier_plugins: vec![test_plugin],
@@ -9966,7 +10687,12 @@ async fn test_document_format_with_prettier(cx: &mut gpui::TestAppContext) {
 
     editor
         .update(cx, |editor, cx| {
-            editor.perform_format(project.clone(), FormatTrigger::Manual, cx)
+            editor.perform_format(
+                project.clone(),
+                FormatTrigger::Manual,
+                FormatTarget::Buffer,
+                cx,
+            )
         })
         .unwrap()
         .await;
@@ -9980,7 +10706,12 @@ async fn test_document_format_with_prettier(cx: &mut gpui::TestAppContext) {
         settings.defaults.formatter = Some(language_settings::SelectedFormatter::Auto)
     });
     let format = editor.update(cx, |editor, cx| {
-        editor.perform_format(project.clone(), FormatTrigger::Manual, cx)
+        editor.perform_format(
+            project.clone(),
+            FormatTrigger::Manual,
+            FormatTarget::Buffer,
+            cx,
+        )
     });
     format.await.unwrap();
     assert_eq!(
@@ -10413,7 +11144,7 @@ async fn test_multibuffer_reverts(cx: &mut gpui::TestAppContext) {
     diff_every_buffer_row(&buffer_3, sample_text_3.clone(), cols, cx);
 
     let multibuffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         multibuffer.push_excerpts(
             buffer_1.clone(),
             [
@@ -10553,7 +11284,7 @@ async fn test_mutlibuffer_in_navigation_history(cx: &mut gpui::TestAppContext) {
     let buffer_3 = cx.new_model(|cx| Buffer::local(sample_text_3.clone(), cx));
 
     let multi_buffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         multibuffer.push_excerpts(
             buffer_1.clone(),
             [
@@ -10852,37 +11583,31 @@ async fn test_toggle_hunk_diff(executor: BackgroundExecutor, cx: &mut gpui::Test
 
     cx.set_diff_base(Some(&diff_base));
     executor.run_until_parked();
-    let unexpanded_hunks = vec![
-        (
-            "use some::mod;\n".to_string(),
-            DiffHunkStatus::Modified,
-            DisplayRow(0)..DisplayRow(1),
-        ),
-        (
-            "const A: u32 = 42;\n".to_string(),
-            DiffHunkStatus::Removed,
-            DisplayRow(2)..DisplayRow(2),
-        ),
-        (
-            "    println!(\"hello\");\n".to_string(),
-            DiffHunkStatus::Modified,
-            DisplayRow(4)..DisplayRow(5),
-        ),
-        (
-            "".to_string(),
-            DiffHunkStatus::Added,
-            DisplayRow(6)..DisplayRow(7),
-        ),
-    ];
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(all_hunks, unexpanded_hunks);
-    });
 
     cx.update_editor(|editor, cx| {
-        for _ in 0..4 {
-            editor.go_to_hunk(&GoToHunk, cx);
+        editor.go_to_next_hunk(&GoToHunk, cx);
+        editor.toggle_hunk_diff(&ToggleHunkDiff, cx);
+    });
+    executor.run_until_parked();
+    cx.assert_diff_hunks(
+        r#"
+          use some::modified;
+
+
+          fn main() {
+        -     println!("hello");
+        +     println!("hello there");
+
+              println!("around the");
+              println!("world");
+          }
+        "#
+        .unindent(),
+    );
+
+    cx.update_editor(|editor, cx| {
+        for _ in 0..3 {
+            editor.go_to_next_hunk(&GoToHunk, cx);
             editor.toggle_hunk_diff(&ToggleHunkDiff, cx);
         }
     });
@@ -10901,57 +11626,47 @@ async fn test_toggle_hunk_diff(executor: BackgroundExecutor, cx: &mut gpui::Test
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(1)..=DisplayRow(1), DisplayRow(7)..=DisplayRow(7), DisplayRow(9)..=DisplayRow(9)],
-            "After expanding, all git additions should be highlighted for Modified (split into added and removed) and Added hunks"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![
-                ("use some::mod;\n".to_string(), DiffHunkStatus::Modified, DisplayRow(1)..DisplayRow(2)),
-                ("const A: u32 = 42;\n".to_string(), DiffHunkStatus::Removed, DisplayRow(4)..DisplayRow(4)),
-                ("    println!(\"hello\");\n".to_string(), DiffHunkStatus::Modified, DisplayRow(7)..DisplayRow(8)),
-                ("".to_string(), DiffHunkStatus::Added, DisplayRow(9)..DisplayRow(10)),
-            ],
-            "After expanding, all hunks' display rows should have shifted by the amount of deleted lines added \
-            (from modified and removed hunks)"
-        );
-        assert_eq!(
-            all_hunks, all_expanded_hunks,
-            "Editor hunks should not change and all be expanded"
-        );
-    });
+
+    cx.assert_diff_hunks(
+        r#"
+        - use some::mod;
+        + use some::modified;
+
+        - const A: u32 = 42;
+
+          fn main() {
+        -     println!("hello");
+        +     println!("hello there");
+
+        +     println!("around the");
+              println!("world");
+          }
+        "#
+        .unindent(),
+    );
 
     cx.update_editor(|editor, cx| {
         editor.cancel(&Cancel, cx);
-
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            Vec::new(),
-            "After cancelling in editor, no git highlights should be left"
-        );
-        assert_eq!(
-            all_expanded_hunks,
-            Vec::new(),
-            "After cancelling in editor, no hunks should be expanded"
-        );
-        assert_eq!(
-            all_hunks, unexpanded_hunks,
-            "After cancelling in editor, regular hunks' coordinates should get back to normal"
-        );
     });
+
+    cx.assert_diff_hunks(
+        r#"
+          use some::modified;
+
+
+          fn main() {
+              println!("hello there");
+
+              println!("around the");
+              println!("world");
+          }
+        "#
+        .unindent(),
+    );
 }
 
 #[gpui::test]
-async fn test_toggled_diff_base_change(
+async fn test_diff_base_change_with_expanded_diff_hunks(
     executor: BackgroundExecutor,
     cx: &mut gpui::TestAppContext,
 ) {
@@ -10967,7 +11682,7 @@ async fn test_toggled_diff_base_change(
         const B: u32 = 42;
         const C: u32 = 42;
 
-        fn main(ˇ) {
+        fn main() {
             println!("hello");
 
             println!("world");
@@ -10995,114 +11710,78 @@ async fn test_toggled_diff_base_change(
 
     cx.set_diff_base(Some(&diff_base));
     executor.run_until_parked();
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![
-                (
-                    "use some::mod1;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(0)..DisplayRow(0)
-                ),
-                (
-                    "const B: u32 = 42;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(3)..DisplayRow(3)
-                ),
-                (
-                    "fn main(ˇ) {\n    println!(\"hello\");\n".to_string(),
-                    DiffHunkStatus::Modified,
-                    DisplayRow(5)..DisplayRow(7)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(9)..DisplayRow(11)
-                ),
-            ]
-        );
-    });
 
     cx.update_editor(|editor, cx| {
         editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-        use some::mod2;
+    cx.assert_diff_hunks(
+        r#"
+        - use some::mod1;
+          use some::mod2;
 
-        const A: u32 = 42;
-        const C: u32 = 42;
+          const A: u32 = 42;
+        - const B: u32 = 42;
+          const C: u32 = 42;
 
-        fn main(ˇ) {
-            //println!("hello");
+          fn main() {
+        -     println!("hello");
+        +     //println!("hello");
 
-            println!("world");
-            //
-            //
-        }
+              println!("world");
+        +     //
+        +     //
+          }
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(9)..=DisplayRow(10), DisplayRow(13)..=DisplayRow(14)],
-            "After expanding, all git additions should be highlighted for Modified (split into added and removed) and Added hunks"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![
-                ("use some::mod1;\n".to_string(), DiffHunkStatus::Removed, DisplayRow(1)..DisplayRow(1)),
-                ("const B: u32 = 42;\n".to_string(), DiffHunkStatus::Removed, DisplayRow(5)..DisplayRow(5)),
-                ("fn main(ˇ) {\n    println!(\"hello\");\n".to_string(), DiffHunkStatus::Modified, DisplayRow(9)..DisplayRow(11)),
-                ("".to_string(), DiffHunkStatus::Added, DisplayRow(13)..DisplayRow(15)),
-            ],
-            "After expanding, all hunks' display rows should have shifted by the amount of deleted lines added \
-            (from modified and removed hunks)"
-        );
-        assert_eq!(
-            all_hunks, all_expanded_hunks,
-            "Editor hunks should not change and all be expanded"
-        );
-    });
 
     cx.set_diff_base(Some("new diff base!"));
     executor.run_until_parked();
+    cx.assert_diff_hunks(
+        r#"
+          use some::mod2;
+
+          const A: u32 = 42;
+          const C: u32 = 42;
+
+          fn main() {
+              //println!("hello");
+
+              println!("world");
+              //
+              //
+          }
+        "#
+        .unindent(),
+    );
 
     cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            Vec::new(),
-            "After diff base is changed, old git highlights should be removed"
-        );
-        assert_eq!(
-            all_expanded_hunks,
-            Vec::new(),
-            "After diff base is changed, old git hunk expansions should be removed"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "new diff base!".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(0)..snapshot.display_snapshot.max_point().row()
-            )],
-            "After diff base is changed, hunks should update"
-        );
+        editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
     });
+    executor.run_until_parked();
+    cx.assert_diff_hunks(
+        r#"
+        - new diff base!
+        + use some::mod2;
+        +
+        + const A: u32 = 42;
+        + const C: u32 = 42;
+        +
+        + fn main() {
+        +     //println!("hello");
+        +
+        +     println!("world");
+        +     //
+        +     //
+        + }
+        "#
+        .unindent(),
+    );
 }
 
 #[gpui::test]
-async fn test_fold_unfold_diff(executor: BackgroundExecutor, cx: &mut gpui::TestAppContext) {
+async fn test_fold_unfold_diff_hunk(executor: BackgroundExecutor, cx: &mut gpui::TestAppContext) {
     init_test(cx, |_| {});
 
     let mut cx = EditorTestContext::new(cx).await;
@@ -11115,7 +11794,7 @@ async fn test_fold_unfold_diff(executor: BackgroundExecutor, cx: &mut gpui::Test
         const B: u32 = 42;
         const C: u32 = 42;
 
-        fn main(ˇ) {
+        fn main() {
             println!("hello");
 
             println!("world");
@@ -11159,340 +11838,141 @@ async fn test_fold_unfold_diff(executor: BackgroundExecutor, cx: &mut gpui::Test
 
     cx.set_diff_base(Some(&diff_base));
     executor.run_until_parked();
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![
-                (
-                    "use some::mod1;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(0)..DisplayRow(0)
-                ),
-                (
-                    "const B: u32 = 42;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(3)..DisplayRow(3)
-                ),
-                (
-                    "fn main(ˇ) {\n    println!(\"hello\");\n".to_string(),
-                    DiffHunkStatus::Modified,
-                    DisplayRow(5)..DisplayRow(7)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(9)..DisplayRow(11)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(15)..DisplayRow(16)
-                ),
-                (
-                    "fn another2() {\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(18)..DisplayRow(18)
-                ),
-            ]
-        );
-    });
 
     cx.update_editor(|editor, cx| {
         editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-        «use some::mod2;
 
-        const A: u32 = 42;
-        const C: u32 = 42;
+    cx.assert_diff_hunks(
+        r#"
+        - use some::mod1;
+          use some::mod2;
 
-        fn main() {
-            //println!("hello");
+          const A: u32 = 42;
+        - const B: u32 = 42;
+          const C: u32 = 42;
 
-            println!("world");
-            //
-            //ˇ»
-        }
+          fn main() {
+        -     println!("hello");
+        +     //println!("hello");
 
-        fn another() {
-            println!("another");
-            println!("another");
-        }
+              println!("world");
+        +     //
+        +     //
+          }
 
-            println!("another2");
-        }
+          fn another() {
+              println!("another");
+        +     println!("another");
+          }
+
+        - fn another2() {
+              println!("another2");
+          }
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![
-                DisplayRow(9)..=DisplayRow(10),
-                DisplayRow(13)..=DisplayRow(14),
-                DisplayRow(19)..=DisplayRow(19)
-            ]
-        );
-        assert_eq!(
-            all_hunks,
-            vec![
-                (
-                    "use some::mod1;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(1)..DisplayRow(1)
-                ),
-                (
-                    "const B: u32 = 42;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(5)..DisplayRow(5)
-                ),
-                (
-                    "fn main(ˇ) {\n    println!(\"hello\");\n".to_string(),
-                    DiffHunkStatus::Modified,
-                    DisplayRow(9)..DisplayRow(11)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(13)..DisplayRow(15)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(19)..DisplayRow(20)
-                ),
-                (
-                    "fn another2() {\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(23)..DisplayRow(23)
-                ),
-            ],
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
+    // Fold across some of the diff hunks. They should no longer appear expanded.
     cx.update_editor(|editor, cx| editor.fold_selected_ranges(&FoldSelectedRanges, cx));
     cx.executor().run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-        «use some::mod2;
 
-        const A: u32 = 42;
-        const C: u32 = 42;
+    // Hunks are not shown if their position is within a fold
+    cx.assert_diff_hunks(
+        r#"
+          use some::mod2;
 
-        fn main() {
-            //println!("hello");
+          const A: u32 = 42;
+          const C: u32 = 42;
 
-            println!("world");
-            //
-            //ˇ»
-        }
+          fn main() {
+              //println!("hello");
 
-        fn another() {
-            println!("another");
-            println!("another");
-        }
+              println!("world");
+              //
+              //
+          }
 
-            println!("another2");
-        }
+          fn another() {
+              println!("another");
+        +     println!("another");
+          }
+
+        - fn another2() {
+              println!("another2");
+          }
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(0)..=DisplayRow(0), DisplayRow(5)..=DisplayRow(5)],
-            "Only one hunk is left not folded, its highlight should be visible"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![
-                (
-                    "use some::mod1;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(0)..DisplayRow(0)
-                ),
-                (
-                    "const B: u32 = 42;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(0)..DisplayRow(0)
-                ),
-                (
-                    "fn main(ˇ) {\n    println!(\"hello\");\n".to_string(),
-                    DiffHunkStatus::Modified,
-                    DisplayRow(0)..DisplayRow(0)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(0)..DisplayRow(1)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(5)..DisplayRow(6)
-                ),
-                (
-                    "fn another2() {\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(9)..DisplayRow(9)
-                ),
-            ],
-            "Hunk list should still return shifted folded hunks"
-        );
-        assert_eq!(
-            all_expanded_hunks,
-            vec![
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(5)..DisplayRow(6)
-                ),
-                (
-                    "fn another2() {\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(9)..DisplayRow(9)
-                ),
-            ],
-            "Only non-folded hunks should be left expanded"
-        );
-    });
 
     cx.update_editor(|editor, cx| {
         editor.select_all(&SelectAll, cx);
         editor.unfold_lines(&UnfoldLines, cx);
     });
     cx.executor().run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-        «use some::mod2;
 
-        const A: u32 = 42;
-        const C: u32 = 42;
+    // The deletions reappear when unfolding.
+    cx.assert_diff_hunks(
+        r#"
+        - use some::mod1;
+          use some::mod2;
 
-        fn main() {
-            //println!("hello");
+          const A: u32 = 42;
+        - const B: u32 = 42;
+          const C: u32 = 42;
 
-            println!("world");
-            //
-            //
-        }
+          fn main() {
+        -     println!("hello");
+        +     //println!("hello");
 
-        fn another() {
-            println!("another");
-            println!("another");
-        }
+              println!("world");
+        +     //
+        +     //
+          }
 
-            println!("another2");
-        }
-        ˇ»"#
+          fn another() {
+              println!("another");
+        +     println!("another");
+          }
+
+        - fn another2() {
+              println!("another2");
+          }
+        "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![
-                DisplayRow(9)..=DisplayRow(10),
-                DisplayRow(13)..=DisplayRow(14),
-                DisplayRow(19)..=DisplayRow(19)
-            ],
-            "After unfolding, all hunk diffs should be visible again"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![
-                (
-                    "use some::mod1;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(1)..DisplayRow(1)
-                ),
-                (
-                    "const B: u32 = 42;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(5)..DisplayRow(5)
-                ),
-                (
-                    "fn main(ˇ) {\n    println!(\"hello\");\n".to_string(),
-                    DiffHunkStatus::Modified,
-                    DisplayRow(9)..DisplayRow(11)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(13)..DisplayRow(15)
-                ),
-                (
-                    "".to_string(),
-                    DiffHunkStatus::Added,
-                    DisplayRow(19)..DisplayRow(20)
-                ),
-                (
-                    "fn another2() {\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(23)..DisplayRow(23)
-                ),
-            ],
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 }
 
 #[gpui::test]
 async fn test_toggle_diff_expand_in_multi_buffer(cx: &mut gpui::TestAppContext) {
     init_test(cx, |_| {});
 
-    let cols = 4;
-    let rows = 10;
-    let sample_text_1 = sample_text(rows, cols, 'a');
-    assert_eq!(
-        sample_text_1,
-        "aaaa\nbbbb\ncccc\ndddd\neeee\nffff\ngggg\nhhhh\niiii\njjjj"
-    );
-    let modified_sample_text_1 = "aaaa\ncccc\ndddd\neeee\nffff\ngggg\nhhhh\niiii\njjjj";
-    let sample_text_2 = sample_text(rows, cols, 'l');
-    assert_eq!(
-        sample_text_2,
-        "llll\nmmmm\nnnnn\noooo\npppp\nqqqq\nrrrr\nssss\ntttt\nuuuu"
-    );
-    let modified_sample_text_2 = "llll\nmmmm\n1n1n1n1n1\noooo\npppp\nqqqq\nrrrr\nssss\ntttt\nuuuu";
-    let sample_text_3 = sample_text(rows, cols, 'v');
-    assert_eq!(
-        sample_text_3,
-        "vvvv\nwwww\nxxxx\nyyyy\nzzzz\n{{{{\n||||\n}}}}\n~~~~\n\u{7f}\u{7f}\u{7f}\u{7f}"
-    );
-    let modified_sample_text_3 =
-        "vvvv\nwwww\nxxxx\nyyyy\nzzzz\n@@@@\n{{{{\n||||\n}}}}\n~~~~\n\u{7f}\u{7f}\u{7f}\u{7f}";
+    let file_1_old = "aaa\nbbb\nccc\nddd\neee\nfff\nggg\nhhh\niii\njjj";
+    let file_1_new = "aaa\nccc\nddd\neee\nfff\nggg\nhhh\niii\njjj";
+    let file_2_old = "lll\nmmm\nnnn\nooo\nppp\nqqq\nrrr\nsss\nttt\nuuu";
+    let file_2_new = "lll\nmmm\nNNN\nooo\nppp\nqqq\nrrr\nsss\nttt\nuuu";
+    let file_3_old = "111\n222\n333\n444\n555\n777\n888\n999\n000\n!!!";
+    let file_3_new = "111\n222\n333\n444\n555\n666\n777\n888\n999\n000\n!!!";
+
     let buffer_1 = cx.new_model(|cx| {
-        let mut buffer = Buffer::local(modified_sample_text_1.to_string(), cx);
-        buffer.set_diff_base(Some(sample_text_1.clone()), cx);
+        let mut buffer = Buffer::local(file_1_new.to_string(), cx);
+        buffer.set_diff_base(Some(file_1_old.into()), cx);
         buffer
     });
     let buffer_2 = cx.new_model(|cx| {
-        let mut buffer = Buffer::local(modified_sample_text_2.to_string(), cx);
-        buffer.set_diff_base(Some(sample_text_2.clone()), cx);
+        let mut buffer = Buffer::local(file_2_new.to_string(), cx);
+        buffer.set_diff_base(Some(file_2_old.into()), cx);
         buffer
     });
     let buffer_3 = cx.new_model(|cx| {
-        let mut buffer = Buffer::local(modified_sample_text_3.to_string(), cx);
-        buffer.set_diff_base(Some(sample_text_3.clone()), cx);
+        let mut buffer = Buffer::local(file_3_new.to_string(), cx);
+        buffer.set_diff_base(Some(file_3_old.into()), cx);
         buffer
     });
 
     let multi_buffer = cx.new_model(|cx| {
-        let mut multibuffer = MultiBuffer::new(0, ReadWrite);
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
         multibuffer.push_excerpts(
             buffer_1.clone(),
             [
@@ -11505,7 +11985,7 @@ async fn test_toggle_diff_expand_in_multi_buffer(cx: &mut gpui::TestAppContext) 
                     primary: None,
                 },
                 ExcerptRange {
-                    context: Point::new(9, 0)..Point::new(10, 4),
+                    context: Point::new(9, 0)..Point::new(10, 3),
                     primary: None,
                 },
             ],
@@ -11523,7 +12003,7 @@ async fn test_toggle_diff_expand_in_multi_buffer(cx: &mut gpui::TestAppContext) 
                     primary: None,
                 },
                 ExcerptRange {
-                    context: Point::new(9, 0)..Point::new(10, 4),
+                    context: Point::new(9, 0)..Point::new(10, 3),
                     primary: None,
                 },
             ],
@@ -11541,7 +12021,7 @@ async fn test_toggle_diff_expand_in_multi_buffer(cx: &mut gpui::TestAppContext) 
                     primary: None,
                 },
                 ExcerptRange {
-                    context: Point::new(9, 0)..Point::new(10, 4),
+                    context: Point::new(9, 0)..Point::new(10, 3),
                     primary: None,
                 },
             ],
@@ -11550,143 +12030,135 @@ async fn test_toggle_diff_expand_in_multi_buffer(cx: &mut gpui::TestAppContext) 
         multibuffer
     });
 
-    let fs = FakeFs::new(cx.executor());
-    fs.insert_tree(
-        "/a",
-        json!({
-            "main.rs": modified_sample_text_1,
-            "other.rs": modified_sample_text_2,
-            "lib.rs": modified_sample_text_3,
-        }),
-    )
-    .await;
+    let editor = cx.add_window(|cx| Editor::new(EditorMode::Full, multi_buffer, None, true, cx));
+    let mut cx = EditorTestContext::for_editor(editor, cx).await;
+    cx.run_until_parked();
 
-    let project = Project::test(fs, ["/a".as_ref()], cx).await;
-    let workspace = cx.add_window(|cx| Workspace::test_new(project.clone(), cx));
-    let cx = &mut VisualTestContext::from_window(*workspace.deref(), cx);
-    let multi_buffer_editor = cx.new_view(|cx| {
-        Editor::new(
-            EditorMode::Full,
-            multi_buffer,
-            Some(project.clone()),
-            true,
-            cx,
-        )
-    });
-    cx.executor().run_until_parked();
+    cx.assert_editor_state(
+        &"
+            ˇaaa
+            ccc
+            ddd
 
-    let expected_all_hunks = vec![
-        (
-            "bbbb\n".to_string(),
-            DiffHunkStatus::Removed,
-            DisplayRow(4)..DisplayRow(4),
-        ),
-        (
-            "nnnn\n".to_string(),
-            DiffHunkStatus::Modified,
-            DisplayRow(21)..DisplayRow(22),
-        ),
-        (
-            "".to_string(),
-            DiffHunkStatus::Added,
-            DisplayRow(41)..DisplayRow(42),
-        ),
-    ];
-    let expected_all_hunks_shifted = vec![
-        (
-            "bbbb\n".to_string(),
-            DiffHunkStatus::Removed,
-            DisplayRow(5)..DisplayRow(5),
-        ),
-        (
-            "nnnn\n".to_string(),
-            DiffHunkStatus::Modified,
-            DisplayRow(23)..DisplayRow(24),
-        ),
-        (
-            "".to_string(),
-            DiffHunkStatus::Added,
-            DisplayRow(43)..DisplayRow(44),
-        ),
-    ];
+            ggg
+            hhh
 
-    multi_buffer_editor.update(cx, |editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(expanded_hunks_background_highlights(editor, cx), Vec::new());
-        assert_eq!(all_hunks, expected_all_hunks);
-        assert_eq!(all_expanded_hunks, Vec::new());
-    });
 
-    multi_buffer_editor.update(cx, |editor, cx| {
+            lll
+            mmm
+            NNN
+
+            qqq
+            rrr
+
+            uuu
+            111
+            222
+            333
+
+            666
+            777
+
+            000
+            !!!"
+        .unindent(),
+    );
+
+    cx.update_editor(|editor, cx| {
         editor.select_all(&SelectAll, cx);
         editor.toggle_hunk_diff(&ToggleHunkDiff, cx);
     });
     cx.executor().run_until_parked();
-    multi_buffer_editor.update(cx, |editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![
-                DisplayRow(23)..=DisplayRow(23),
-                DisplayRow(43)..=DisplayRow(43)
-            ],
-        );
-        assert_eq!(all_hunks, expected_all_hunks_shifted);
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
-    multi_buffer_editor.update(cx, |editor, cx| {
-        editor.toggle_hunk_diff(&ToggleHunkDiff, cx);
-    });
-    cx.executor().run_until_parked();
-    multi_buffer_editor.update(cx, |editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(expanded_hunks_background_highlights(editor, cx), Vec::new());
-        assert_eq!(all_hunks, expected_all_hunks);
-        assert_eq!(all_expanded_hunks, Vec::new());
-    });
+    cx.assert_diff_hunks(
+        "
+            aaa
+          - bbb
+            ccc
+            ddd
 
-    multi_buffer_editor.update(cx, |editor, cx| {
-        editor.toggle_hunk_diff(&ToggleHunkDiff, cx);
-    });
-    cx.executor().run_until_parked();
-    multi_buffer_editor.update(cx, |editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![
-                DisplayRow(23)..=DisplayRow(23),
-                DisplayRow(43)..=DisplayRow(43)
-            ],
-        );
-        assert_eq!(all_hunks, expected_all_hunks_shifted);
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
+            ggg
+            hhh
 
-    multi_buffer_editor.update(cx, |editor, cx| {
-        editor.toggle_hunk_diff(&ToggleHunkDiff, cx);
-    });
-    cx.executor().run_until_parked();
-    multi_buffer_editor.update(cx, |editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(expanded_hunks_background_highlights(editor, cx), Vec::new());
-        assert_eq!(all_hunks, expected_all_hunks);
-        assert_eq!(all_expanded_hunks, Vec::new());
-    });
+
+            lll
+            mmm
+          - nnn
+          + NNN
+
+            qqq
+            rrr
+
+            uuu
+            111
+            222
+            333
+
+          + 666
+            777
+
+            000
+            !!!"
+        .unindent(),
+    );
 }
 
 #[gpui::test]
-async fn test_edits_around_toggled_additions(
+async fn test_expand_diff_hunk_at_excerpt_boundary(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+
+    let base = "aaa\nbbb\nccc\nddd\neee\nfff\nggg\n";
+    let text = "aaa\nBBB\nBB2\nccc\nDDD\nEEE\nfff\nggg\n";
+
+    let buffer = cx.new_model(|cx| {
+        let mut buffer = Buffer::local(text.to_string(), cx);
+        buffer.set_diff_base(Some(base.into()), cx);
+        buffer
+    });
+
+    let multi_buffer = cx.new_model(|cx| {
+        let mut multibuffer = MultiBuffer::new(ReadWrite);
+        multibuffer.push_excerpts(
+            buffer.clone(),
+            [
+                ExcerptRange {
+                    context: Point::new(0, 0)..Point::new(2, 0),
+                    primary: None,
+                },
+                ExcerptRange {
+                    context: Point::new(5, 0)..Point::new(7, 0),
+                    primary: None,
+                },
+            ],
+            cx,
+        );
+        multibuffer
+    });
+
+    let editor = cx.add_window(|cx| Editor::new(EditorMode::Full, multi_buffer, None, true, cx));
+    let mut cx = EditorTestContext::for_editor(editor, cx).await;
+    cx.run_until_parked();
+
+    cx.update_editor(|editor, cx| editor.expand_all_hunk_diffs(&Default::default(), cx));
+    cx.executor().run_until_parked();
+
+    cx.assert_diff_hunks(
+        "
+            aaa
+          - bbb
+          + BBB
+
+          - ddd
+          - eee
+          + EEE
+            fff
+        "
+        .unindent(),
+    );
+}
+
+#[gpui::test]
+async fn test_edits_around_expanded_insertion_hunks(
     executor: BackgroundExecutor,
     cx: &mut gpui::TestAppContext,
 ) {
@@ -11729,31 +12201,21 @@ async fn test_edits_around_toggled_additions(
 
     cx.set_diff_base(Some(&diff_base));
     executor.run_until_parked();
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "".to_string(),
-                DiffHunkStatus::Added,
-                DisplayRow(4)..DisplayRow(7)
-            )]
-        );
-    });
+
     cx.update_editor(|editor, cx| {
         editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
+
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
         const A: u32 = 42;
-        const B: u32 = 42;
-        const C: u32 = 42;
-        ˇ
+      + const B: u32 = 42;
+      + const C: u32 = 42;
+      +
 
         fn main() {
             println!("hello");
@@ -11763,37 +12225,20 @@ async fn test_edits_around_toggled_additions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "".to_string(),
-                DiffHunkStatus::Added,
-                DisplayRow(4)..DisplayRow(7)
-            )]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(4)..=DisplayRow(6)]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
     cx.update_editor(|editor, cx| editor.handle_input("const D: u32 = 42;\n", cx));
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
+
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
         const A: u32 = 42;
-        const B: u32 = 42;
-        const C: u32 = 42;
-        const D: u32 = 42;
-        ˇ
+      + const B: u32 = 42;
+      + const C: u32 = 42;
+      + const D: u32 = 42;
+      +
 
         fn main() {
             println!("hello");
@@ -11803,42 +12248,21 @@ async fn test_edits_around_toggled_additions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "".to_string(),
-                DiffHunkStatus::Added,
-                DisplayRow(4)..DisplayRow(8)
-            )]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(4)..=DisplayRow(6)],
-            "Edited hunk should have one more line added"
-        );
-        assert_eq!(
-            all_hunks, all_expanded_hunks,
-            "Expanded hunk should also grow with the addition"
-        );
-    });
 
     cx.update_editor(|editor, cx| editor.handle_input("const E: u32 = 42;\n", cx));
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
+
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
         const A: u32 = 42;
-        const B: u32 = 42;
-        const C: u32 = 42;
-        const D: u32 = 42;
-        const E: u32 = 42;
-        ˇ
+      + const B: u32 = 42;
+      + const C: u32 = 42;
+      + const D: u32 = 42;
+      + const E: u32 = 42;
+      +
 
         fn main() {
             println!("hello");
@@ -11848,41 +12272,22 @@ async fn test_edits_around_toggled_additions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "".to_string(),
-                DiffHunkStatus::Added,
-                DisplayRow(4)..DisplayRow(9)
-            )]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(4)..=DisplayRow(6)],
-            "Edited hunk should have one more line added"
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
     cx.update_editor(|editor, cx| {
-        editor.move_up(&MoveUp, cx);
         editor.delete_line(&DeleteLine, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
+
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
         const A: u32 = 42;
-        const B: u32 = 42;
-        const C: u32 = 42;
-        const D: u32 = 42;
-        ˇ
+      + const B: u32 = 42;
+      + const C: u32 = 42;
+      + const D: u32 = 42;
+      + const E: u32 = 42;
 
         fn main() {
             println!("hello");
@@ -11892,28 +12297,6 @@ async fn test_edits_around_toggled_additions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "".to_string(),
-                DiffHunkStatus::Added,
-                DisplayRow(4)..DisplayRow(8)
-            )]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(4)..=DisplayRow(6)],
-            "Deleting a line should shrint the hunk"
-        );
-        assert_eq!(
-            all_hunks, all_expanded_hunks,
-            "Expanded hunk should also shrink with the addition"
-        );
-    });
 
     cx.update_editor(|editor, cx| {
         editor.move_up(&MoveUp, cx);
@@ -11930,7 +12313,24 @@ async fn test_edits_around_toggled_additions(
         use some::mod2;
 
         const A: u32 = 42;
+        const B: u32 = 42;
         ˇ
+        fn main() {
+            println!("hello");
+
+            println!("world");
+        }
+        "#
+        .unindent(),
+    );
+
+    cx.assert_diff_hunks(
+        r#"
+        use some::mod1;
+        use some::mod2;
+
+        const A: u32 = 42;
+      + const B: u32 = 42;
 
         fn main() {
             println!("hello");
@@ -11940,33 +12340,18 @@ async fn test_edits_around_toggled_additions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "".to_string(),
-                DiffHunkStatus::Added,
-                DisplayRow(5)..DisplayRow(6)
-            )]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(5)..=DisplayRow(5)]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
     cx.update_editor(|editor, cx| {
         editor.select_up_by_lines(&SelectUpByLines { lines: 5 }, cx);
         editor.delete_line(&DeleteLine, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-        ˇ
+    cx.assert_diff_hunks(
+        r#"
+        use some::mod1;
+      - use some::mod2;
+      -
+      - const A: u32 = 42;
 
         fn main() {
             println!("hello");
@@ -11976,44 +12361,10 @@ async fn test_edits_around_toggled_additions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![
-                (
-                    "use some::mod1;\nuse some::mod2;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(0)..DisplayRow(0)
-                ),
-                (
-                    "const A: u32 = 42;\n".to_string(),
-                    DiffHunkStatus::Removed,
-                    DisplayRow(2)..DisplayRow(2)
-                )
-            ]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            Vec::new(),
-            "Should close all stale expanded addition hunks"
-        );
-        assert_eq!(
-            all_expanded_hunks,
-            vec![(
-                "const A: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Removed,
-                DisplayRow(2)..DisplayRow(2)
-            )],
-            "Should open hunks that were adjacent to the stale addition one"
-        );
-    });
 }
 
 #[gpui::test]
-async fn test_edits_around_toggled_deletions(
+async fn test_edits_around_expanded_deletion_hunks(
     executor: BackgroundExecutor,
     cx: &mut gpui::TestAppContext,
 ) {
@@ -12035,7 +12386,7 @@ async fn test_edits_around_toggled_deletions(
 
             println!("world");
         }
-        "#
+    "#
     .unindent();
     executor.run_until_parked();
     cx.set_state(
@@ -12058,28 +12409,19 @@ async fn test_edits_around_toggled_deletions(
 
     cx.set_diff_base(Some(&diff_base));
     executor.run_until_parked();
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Removed,
-                DisplayRow(3)..DisplayRow(3)
-            )]
-        );
-    });
+
     cx.update_editor(|editor, cx| {
         editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
+
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
-        ˇconst B: u32 = 42;
+      - const A: u32 = 42;
+        const B: u32 = 42;
         const C: u32 = 42;
 
 
@@ -12091,21 +12433,6 @@ async fn test_edits_around_toggled_deletions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(expanded_hunks_background_highlights(editor, cx), Vec::new());
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Removed,
-                DisplayRow(4)..DisplayRow(4)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
     cx.update_editor(|editor, cx| {
         editor.delete_line(&DeleteLine, cx);
@@ -12127,25 +12454,24 @@ async fn test_edits_around_toggled_deletions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            Vec::new(),
-            "Deleted hunks do not highlight current editor's background"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\nconst B: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Removed,
-                DisplayRow(5)..DisplayRow(5)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
+    cx.assert_diff_hunks(
+        r#"
+        use some::mod1;
+        use some::mod2;
+
+      - const A: u32 = 42;
+      - const B: u32 = 42;
+        const C: u32 = 42;
+
+
+        fn main() {
+            println!("hello");
+
+            println!("world");
+        }
+        "#
+        .unindent(),
+    );
 
     cx.update_editor(|editor, cx| {
         editor.delete_line(&DeleteLine, cx);
@@ -12166,21 +12492,24 @@ async fn test_edits_around_toggled_deletions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(expanded_hunks_background_highlights(editor, cx), Vec::new());
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\nconst B: u32 = 42;\nconst C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Removed,
-                DisplayRow(6)..DisplayRow(6)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
+    cx.assert_diff_hunks(
+        r#"
+        use some::mod1;
+        use some::mod2;
+
+      - const A: u32 = 42;
+      - const B: u32 = 42;
+      - const C: u32 = 42;
+
+
+        fn main() {
+            println!("hello");
+
+            println!("world");
+        }
+        "#
+        .unindent(),
+    );
 
     cx.update_editor(|editor, cx| {
         editor.handle_input("replacement", cx);
@@ -12201,29 +12530,29 @@ async fn test_edits_around_toggled_deletions(
         "#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\nconst B: u32 = 42;\nconst C: u32 = 42;\n\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(7)..DisplayRow(8)
-            )]
-        );
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(7)..=DisplayRow(7)],
-            "Modified expanded hunks should display additions and highlight their background"
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
+    cx.assert_diff_hunks(
+        r#"
+        use some::mod1;
+        use some::mod2;
+
+      - const A: u32 = 42;
+      - const B: u32 = 42;
+      - const C: u32 = 42;
+      -
+      + replacement
+
+        fn main() {
+            println!("hello");
+
+            println!("world");
+        }
+        "#
+        .unindent(),
+    );
 }
 
 #[gpui::test]
-async fn test_edits_around_toggled_modifications(
+async fn test_edit_after_expanded_modification_hunk(
     executor: BackgroundExecutor,
     cx: &mut gpui::TestAppContext,
 ) {
@@ -12247,7 +12576,7 @@ async fn test_edits_around_toggled_modifications(
             println!("world");
         }"#
     .unindent();
-    executor.run_until_parked();
+
     cx.set_state(
         &r#"
         use some::mod1;
@@ -12270,29 +12599,19 @@ async fn test_edits_around_toggled_modifications(
     cx.set_diff_base(Some(&diff_base));
     executor.run_until_parked();
     cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(5)..DisplayRow(6)
-            )]
-        );
-    });
-    cx.update_editor(|editor, cx| {
         editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
+
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
         const A: u32 = 42;
         const B: u32 = 42;
-        const C: u32 = 43ˇ
+      - const C: u32 = 42;
+      + const C: u32 = 43
         const D: u32 = 42;
 
 
@@ -12303,262 +12622,23 @@ async fn test_edits_around_toggled_modifications(
         }"#
         .unindent(),
     );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(6)..=DisplayRow(6)],
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(6)..DisplayRow(7)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
 
     cx.update_editor(|editor, cx| {
         editor.handle_input("\nnew_line\n", cx);
     });
     executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-            use some::mod1;
-            use some::mod2;
 
-            const A: u32 = 42;
-            const B: u32 = 42;
-            const C: u32 = 43
-            new_line
-            ˇ
-            const D: u32 = 42;
-
-
-            fn main() {
-                println!("hello");
-
-                println!("world");
-            }"#
-        .unindent(),
-    );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(6)..=DisplayRow(6)],
-            "Modified hunk should grow highlighted lines on more text additions"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(6)..DisplayRow(9)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
-
-    cx.update_editor(|editor, cx| {
-        editor.move_up(&MoveUp, cx);
-        editor.move_up(&MoveUp, cx);
-        editor.move_up(&MoveUp, cx);
-        editor.delete_line(&DeleteLine, cx);
-    });
-    executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-            use some::mod1;
-            use some::mod2;
-
-            const A: u32 = 42;
-            ˇconst C: u32 = 43
-            new_line
-
-            const D: u32 = 42;
-
-
-            fn main() {
-                println!("hello");
-
-                println!("world");
-            }"#
-        .unindent(),
-    );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(6)..=DisplayRow(8)],
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const B: u32 = 42;\nconst C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(6)..DisplayRow(9)
-            )],
-            "Modified hunk should grow deleted lines on text deletions above"
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
-
-    cx.update_editor(|editor, cx| {
-        editor.move_up(&MoveUp, cx);
-        editor.handle_input("v", cx);
-    });
-    executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-            use some::mod1;
-            use some::mod2;
-
-            vˇconst A: u32 = 42;
-            const C: u32 = 43
-            new_line
-
-            const D: u32 = 42;
-
-
-            fn main() {
-                println!("hello");
-
-                println!("world");
-            }"#
-        .unindent(),
-    );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(6)..=DisplayRow(9)],
-            "Modified hunk should grow deleted lines on text modifications above"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\nconst B: u32 = 42;\nconst C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(6)..DisplayRow(10)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
-
-    cx.update_editor(|editor, cx| {
-        editor.move_down(&MoveDown, cx);
-        editor.move_down(&MoveDown, cx);
-        editor.delete_line(&DeleteLine, cx)
-    });
-    executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-            use some::mod1;
-            use some::mod2;
-
-            vconst A: u32 = 42;
-            const C: u32 = 43
-            ˇ
-            const D: u32 = 42;
-
-
-            fn main() {
-                println!("hello");
-
-                println!("world");
-            }"#
-        .unindent(),
-    );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(6)..=DisplayRow(8)],
-            "Modified hunk should grow shrink lines on modification lines removal"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\nconst B: u32 = 42;\nconst C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(6)..DisplayRow(9)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
-
-    cx.update_editor(|editor, cx| {
-        editor.move_up(&MoveUp, cx);
-        editor.move_up(&MoveUp, cx);
-        editor.select_down_by_lines(&SelectDownByLines { lines: 4 }, cx);
-        editor.delete_line(&DeleteLine, cx)
-    });
-    executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-            use some::mod1;
-            use some::mod2;
-
-            ˇ
-
-            fn main() {
-                println!("hello");
-
-                println!("world");
-            }"#
-        .unindent(),
-    );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            Vec::new(),
-            "Modified hunk should turn into a removed one on all modified lines removal"
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const A: u32 = 42;\nconst B: u32 = 42;\nconst C: u32 = 42;\nconst D: u32 = 42;\n"
-                    .to_string(),
-                DiffHunkStatus::Removed,
-                DisplayRow(7)..DisplayRow(7)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
-}
-
-#[gpui::test]
-async fn test_multiple_expanded_hunks_merge(
-    executor: BackgroundExecutor,
-    cx: &mut gpui::TestAppContext,
-) {
-    init_test(cx, |_| {});
-
-    let mut cx = EditorTestContext::new(cx).await;
-
-    let diff_base = r#"
+    cx.assert_diff_hunks(
+        r#"
         use some::mod1;
         use some::mod2;
 
         const A: u32 = 42;
         const B: u32 = 42;
-        const C: u32 = 42;
+      - const C: u32 = 42;
+      + const C: u32 = 43
+      + new_line
+      +
         const D: u32 = 42;
 
 
@@ -12567,104 +12647,6 @@ async fn test_multiple_expanded_hunks_merge(
 
             println!("world");
         }"#
-    .unindent();
-    executor.run_until_parked();
-    cx.set_state(
-        &r#"
-        use some::mod1;
-        use some::mod2;
-
-        const A: u32 = 42;
-        const B: u32 = 42;
-        const C: u32 = 43ˇ
-        const D: u32 = 42;
-
-
-        fn main() {
-            println!("hello");
-
-            println!("world");
-        }"#
-        .unindent(),
-    );
-
-    cx.set_diff_base(Some(&diff_base));
-    executor.run_until_parked();
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(5)..DisplayRow(6)
-            )]
-        );
-    });
-    cx.update_editor(|editor, cx| {
-        editor.expand_all_hunk_diffs(&ExpandAllHunkDiffs, cx);
-    });
-    executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-        use some::mod1;
-        use some::mod2;
-
-        const A: u32 = 42;
-        const B: u32 = 42;
-        const C: u32 = 43ˇ
-        const D: u32 = 42;
-
-
-        fn main() {
-            println!("hello");
-
-            println!("world");
-        }"#
-        .unindent(),
-    );
-    cx.update_editor(|editor, cx| {
-        let snapshot = editor.snapshot(cx);
-        let all_hunks = editor_hunks(editor, &snapshot, cx);
-        let all_expanded_hunks = expanded_hunks(editor, &snapshot, cx);
-        assert_eq!(
-            expanded_hunks_background_highlights(editor, cx),
-            vec![DisplayRow(6)..=DisplayRow(6)],
-        );
-        assert_eq!(
-            all_hunks,
-            vec![(
-                "const C: u32 = 42;\n".to_string(),
-                DiffHunkStatus::Modified,
-                DisplayRow(6)..DisplayRow(7)
-            )]
-        );
-        assert_eq!(all_hunks, all_expanded_hunks);
-    });
-
-    cx.update_editor(|editor, cx| {
-        editor.handle_input("\nnew_line\n", cx);
-    });
-    executor.run_until_parked();
-    cx.assert_editor_state(
-        &r#"
-            use some::mod1;
-            use some::mod2;
-
-            const A: u32 = 42;
-            const B: u32 = 42;
-            const C: u32 = 43
-            new_line
-            ˇ
-            const D: u32 = 42;
-
-
-            fn main() {
-                println!("hello");
-
-                println!("world");
-            }"#
         .unindent(),
     );
 }
@@ -13490,6 +13472,89 @@ async fn test_goto_definition_with_find_all_references_fallback(cx: &mut gpui::T
     });
 }
 
+#[gpui::test]
+async fn test_find_enclosing_node_with_task(cx: &mut gpui::TestAppContext) {
+    init_test(cx, |_| {});
+
+    let language = Arc::new(Language::new(
+        LanguageConfig::default(),
+        Some(tree_sitter_rust::LANGUAGE.into()),
+    ));
+
+    let text = r#"
+        #[cfg(test)]
+        mod tests() {
+            #[test]
+            fn runnable_1() {
+                let a = 1;
+            }
+
+            #[test]
+            fn runnable_2() {
+                let a = 1;
+                let b = 2;
+            }
+        }
+    "#
+    .unindent();
+
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_file("/file.rs", Default::default()).await;
+
+    let project = Project::test(fs, ["/a".as_ref()], cx).await;
+    let workspace = cx.add_window(|cx| Workspace::test_new(project.clone(), cx));
+    let cx = &mut VisualTestContext::from_window(*workspace.deref(), cx);
+    let buffer = cx.new_model(|cx| Buffer::local(text, cx).with_language(language, cx));
+    let multi_buffer = cx.new_model(|cx| MultiBuffer::singleton(buffer.clone(), cx));
+
+    let editor = cx.new_view(|cx| {
+        Editor::new(
+            EditorMode::Full,
+            multi_buffer,
+            Some(project.clone()),
+            true,
+            cx,
+        )
+    });
+
+    editor.update(cx, |editor, cx| {
+        editor.tasks.insert(
+            (buffer.read(cx).remote_id(), 3),
+            RunnableTasks {
+                templates: vec![],
+                offset: MultiBufferOffset(43),
+                column: 0,
+                extra_variables: HashMap::default(),
+                context_range: BufferOffset(43)..BufferOffset(85),
+            },
+        );
+        editor.tasks.insert(
+            (buffer.read(cx).remote_id(), 8),
+            RunnableTasks {
+                templates: vec![],
+                offset: MultiBufferOffset(86),
+                column: 0,
+                extra_variables: HashMap::default(),
+                context_range: BufferOffset(86)..BufferOffset(191),
+            },
+        );
+
+        // Test finding task when cursor is inside function body
+        editor.change_selections(None, cx, |s| {
+            s.select_ranges([Point::new(4, 5)..Point::new(4, 5)])
+        });
+        let (_, row, _) = editor.find_enclosing_node_task(cx).unwrap();
+        assert_eq!(row, 3, "Should find task for cursor inside runnable_1");
+
+        // Test finding task when cursor is on function name
+        editor.change_selections(None, cx, |s| {
+            s.select_ranges([Point::new(8, 4)..Point::new(8, 4)])
+        });
+        let (_, row, _) = editor.find_enclosing_node_task(cx).unwrap();
+        assert_eq!(row, 8, "Should find task when cursor is on function name");
+    });
+}
+
 fn empty_range(row: usize, column: usize) -> Range<DisplayPoint> {
     let point = DisplayPoint::new(DisplayRow(row as u32), column as u32);
     point..point
@@ -13652,7 +13717,7 @@ pub(crate) fn rust_lang() -> Arc<Language> {
             },
             ..Default::default()
         },
-        Some(tree_sitter_rust::language()),
+        Some(tree_sitter_rust::LANGUAGE.into()),
     ))
 }
 

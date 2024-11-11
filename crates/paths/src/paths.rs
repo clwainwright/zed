@@ -5,6 +5,11 @@ use std::sync::OnceLock;
 
 pub use util::paths::home_dir;
 
+/// Returns the relative path to the zed_server directory on the ssh host.
+pub fn remote_server_dir_relative() -> &'static Path {
+    Path::new(".zed_server")
+}
+
 /// Returns the path to the configuration directory used by Zed.
 pub fn config_dir() -> &'static PathBuf {
     static CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -59,6 +64,12 @@ pub fn support_dir() -> &'static PathBuf {
 pub fn temp_dir() -> &'static PathBuf {
     static TEMP_DIR: OnceLock<PathBuf> = OnceLock::new();
     TEMP_DIR.get_or_init(|| {
+        if cfg!(target_os = "macos") {
+            return dirs::cache_dir()
+                .expect("failed to determine cachesDirectory directory")
+                .join("Zed");
+        }
+
         if cfg!(target_os = "windows") {
             return dirs::cache_dir()
                 .expect("failed to determine LocalAppData directory")
@@ -88,6 +99,12 @@ pub fn logs_dir() -> &'static PathBuf {
             support_dir().join("logs")
         }
     })
+}
+
+/// Returns the path to the Zed server directory on this SSH host.
+pub fn remote_server_state_dir() -> &'static PathBuf {
+    static REMOTE_SERVER_STATE: OnceLock<PathBuf> = OnceLock::new();
+    REMOTE_SERVER_STATE.get_or_init(|| support_dir().join("server_state"))
 }
 
 /// Returns the path to the `Zed.log` file.
@@ -148,6 +165,22 @@ pub fn extensions_dir() -> &'static PathBuf {
     EXTENSIONS_DIR.get_or_init(|| support_dir().join("extensions"))
 }
 
+/// Returns the path to the extensions directory.
+///
+/// This is where installed extensions are stored on a remote.
+pub fn remote_extensions_dir() -> &'static PathBuf {
+    static EXTENSIONS_DIR: OnceLock<PathBuf> = OnceLock::new();
+    EXTENSIONS_DIR.get_or_init(|| support_dir().join("remote_extensions"))
+}
+
+/// Returns the path to the extensions directory.
+///
+/// This is where installed extensions are stored on a remote.
+pub fn remote_extensions_uploads_dir() -> &'static PathBuf {
+    static UPLOAD_DIR: OnceLock<PathBuf> = OnceLock::new();
+    UPLOAD_DIR.get_or_init(|| remote_extensions_dir().join("uploads"))
+}
+
 /// Returns the path to the themes directory.
 ///
 /// This is where themes that are not provided by extensions are stored.
@@ -168,12 +201,6 @@ pub fn contexts_dir() -> &'static PathBuf {
             support_dir().join("conversations")
         }
     })
-}
-
-/// Returns the path within the contexts directory where images from contexts are stored.
-pub fn context_images_dir() -> &'static PathBuf {
-    static CONTEXT_IMAGES_DIR: OnceLock<PathBuf> = OnceLock::new();
-    CONTEXT_IMAGES_DIR.get_or_init(|| contexts_dir().join("images"))
 }
 
 /// Returns the path to the contexts directory.
@@ -282,3 +309,6 @@ pub fn local_tasks_file_relative_path() -> &'static Path {
 pub fn local_vscode_tasks_file_relative_path() -> &'static Path {
     Path::new(".vscode/tasks.json")
 }
+
+/// A default editorconfig file name to use when resolving project settings.
+pub const EDITORCONFIG_NAME: &str = ".editorconfig";

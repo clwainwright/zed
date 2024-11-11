@@ -1,4 +1,3 @@
-(parameter (identifier) @variable)
 (attribute attribute: (identifier) @property)
 
 ; Identifier naming conventions
@@ -12,11 +11,17 @@
 
 ; Basic types and type hints
 
-(type (identifier) @type)
-(type (generic_type (identifier) @type))
+(generic_type (identifier) @type)
 
-; Module imports
+; Type alias
+(type_alias_statement "type" @keyword)
 
+; TypeVar with constraints in type parameters
+(type
+  (tuple (identifier) @type)
+)
+
+; Import statements
 (import_statement
   (dotted_name (identifier) @type.import))
 
@@ -113,7 +118,7 @@
 
 (comment) @comment
 (string) @string
-(escape_sequence) @escape
+(escape_sequence) @string.escape
 
 [
   "("

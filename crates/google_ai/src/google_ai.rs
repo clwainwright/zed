@@ -2,8 +2,7 @@ mod supported_countries;
 
 use anyhow::{anyhow, Result};
 use futures::{io::BufReader, stream::BoxStream, AsyncBufReadExt, AsyncReadExt, Stream, StreamExt};
-use http_client::{AsyncBody, HttpClient, Method, Request as HttpRequest};
-use isahc::config::Configurable;
+use http_client::{AsyncBody, HttpClient, HttpRequestExt, Method, Request as HttpRequest};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -30,7 +29,7 @@ pub async fn stream_generate_content(
         .header("Content-Type", "application/json");
 
     if let Some(low_speed_timeout) = low_speed_timeout {
-        request_builder = request_builder.low_speed_timeout(100, low_speed_timeout);
+        request_builder = request_builder.read_timeout(low_speed_timeout);
     };
 
     let request = request_builder.body(AsyncBody::from(serde_json::to_string(&request)?))?;
@@ -85,7 +84,7 @@ pub async fn count_tokens(
         .header("Content-Type", "application/json");
 
     if let Some(low_speed_timeout) = low_speed_timeout {
-        request_builder = request_builder.low_speed_timeout(100, low_speed_timeout);
+        request_builder = request_builder.read_timeout(low_speed_timeout);
     }
 
     let http_request = request_builder.body(AsyncBody::from(request))?;
@@ -137,7 +136,7 @@ pub struct GenerateContentResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateContentCandidate {
-    pub index: usize,
+    pub index: Option<usize>,
     pub content: Content,
     pub finish_reason: Option<String>,
     pub finish_message: Option<String>,
@@ -304,7 +303,12 @@ pub enum Model {
     #[serde(rename = "gemini-1.5-flash")]
     Gemini15Flash,
     #[serde(rename = "custom")]
-    Custom { name: String, max_tokens: usize },
+    Custom {
+        name: String,
+        /// The name displayed in the UI, such as in the assistant panel model dropdown menu.
+        display_name: Option<String>,
+        max_tokens: usize,
+    },
 }
 
 impl Model {
@@ -320,7 +324,9 @@ impl Model {
         match self {
             Model::Gemini15Pro => "Gemini 1.5 Pro",
             Model::Gemini15Flash => "Gemini 1.5 Flash",
-            Model::Custom { name, .. } => name,
+            Self::Custom {
+                name, display_name, ..
+            } => display_name.as_ref().unwrap_or(name),
         }
     }
 

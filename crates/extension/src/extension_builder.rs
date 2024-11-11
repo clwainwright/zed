@@ -1,6 +1,6 @@
-use crate::wasm_host::parse_wasm_extension_version;
-use crate::ExtensionManifest;
-use crate::{extension_manifest::ExtensionLibraryKind, GrammarManifestEntry};
+use crate::{
+    parse_wasm_extension_version, ExtensionLibraryKind, ExtensionManifest, GrammarManifestEntry,
+};
 use anyhow::{anyhow, bail, Context as _, Result};
 use async_compression::futures::bufread::GzipDecoder;
 use async_tar::Archive;
@@ -18,7 +18,7 @@ use wasm_encoder::{ComponentSectionId, Encode as _, RawSection, Section as _};
 use wasmparser::Parser;
 use wit_component::ComponentEncoder;
 
-/// Currently, we compile with Rust's `wasm32-wasi` target, which works with WASI `preview1`.
+/// Currently, we compile with Rust's `wasm32-wasip1` target, which works with WASI `preview1`.
 /// But the WASM component model is based on WASI `preview2`. So we need an 'adapter' WASM
 /// module, which implements the `preview1` interface in terms of `preview2`.
 ///
@@ -135,6 +135,8 @@ impl ExtensionBuilder {
             .args(options.release.then_some("--release"))
             .arg("--target-dir")
             .arg(extension_dir.join("target"))
+            // WASI builds do not work with sccache and just stuck, so disable it.
+            .env("RUSTC_WRAPPER", "")
             .current_dir(extension_dir)
             .output()
             .context("failed to run `cargo`")?;
@@ -246,6 +248,7 @@ impl ExtensionBuilder {
             .args(scanner_path.exists().then_some(scanner_path))
             .output()
             .context("failed to run clang")?;
+
         if !clang_output.status.success() {
             bail!(
                 "failed to compile {} parser with clang: {}",
@@ -362,12 +365,15 @@ impl ExtensionBuilder {
 
         let output = Command::new("rustup")
             .args(["target", "add", RUST_TARGET])
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .stdout(Stdio::inherit())
             .output()
             .context("failed to run `rustup target add`")?;
         if !output.status.success() {
-            bail!("failed to install the `{RUST_TARGET}` target");
+            bail!(
+                "failed to install the `{RUST_TARGET}` target: {}",
+                String::from_utf8_lossy(&rustc_output.stderr)
+            );
         }
 
         Ok(())
@@ -431,6 +437,7 @@ impl ExtensionBuilder {
         let body = BufReader::new(response.body_mut());
         let body = GzipDecoder::new(body);
         let tar = Archive::new(body);
+
         tar.unpack(&tar_out_dir)
             .await
             .context("failed to unpack wasi-sdk archive")?;
@@ -447,7 +454,7 @@ impl ExtensionBuilder {
     }
 
     // This was adapted from:
-    // https://github.com/bytecodealliance/wasm-tools/1791a8f139722e9f8679a2bd3d8e423e55132b22/src/bin/wasm-tools/strip.rs
+    // https://github.com/bytecodealliance/wasm-tools/blob/1791a8f139722e9f8679a2bd3d8e423e55132b22/src/bin/wasm-tools/strip.rs
     fn strip_custom_sections(&self, input: &Vec<u8>) -> Result<Vec<u8>> {
         use wasmparser::Payload::*;
 
@@ -458,13 +465,15 @@ impl ExtensionBuilder {
 
         for payload in Parser::new(0).parse_all(input) {
             let payload = payload?;
+            let component_header = wasm_encoder::Component::HEADER;
+            let module_header = wasm_encoder::Module::HEADER;
 
             // Track nesting depth, so that we don't mess with inner producer sections:
             match payload {
                 Version { encoding, .. } => {
                     output.extend_from_slice(match encoding {
-                        wasmparser::Encoding::Component => &wasm_encoder::Component::HEADER,
-                        wasmparser::Encoding::Module => &wasm_encoder::Module::HEADER,
+                        wasmparser::Encoding::Component => &component_header,
+                        wasmparser::Encoding::Module => &module_header,
                     });
                 }
                 ModuleSection { .. } | ComponentSection { .. } => {
@@ -476,7 +485,7 @@ impl ExtensionBuilder {
                         Some(c) => c,
                         None => break,
                     };
-                    if output.starts_with(&wasm_encoder::Component::HEADER) {
+                    if output.starts_with(&component_header) {
                         parent.push(ComponentSectionId::Component as u8);
                         output.encode(&mut parent);
                     } else {

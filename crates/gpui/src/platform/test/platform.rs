@@ -162,6 +162,12 @@ impl Platform for TestPlatform {
         self.text_system.clone()
     }
 
+    fn keyboard_layout(&self) -> String {
+        "zed.keyboard.example".to_string()
+    }
+
+    fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}
+
     fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!()
     }
@@ -316,6 +322,10 @@ impl Platform for TestPlatform {
     }
 
     fn register_url_scheme(&self, _: &str) -> Task<anyhow::Result<()>> {
+        unimplemented!()
+    }
+
+    fn open_with_system(&self, _path: &Path) {
         unimplemented!()
     }
 }
